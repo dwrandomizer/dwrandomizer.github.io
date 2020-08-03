@@ -1,0 +1,102 @@
+@font-face {
+    font-family: "Warrior Quest";
+    src: url('warrior-quest.ttf') format('truetype');
+}
+
+body {
+    font-family: "Warrior Quest";
+    background-color: #004;
+    color: white;
+    line-height: 1.5em;
+    background: linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.6)), url('alefgard.png');
+}
+
+h1.headline, h3.headline {
+    text-align: center;
+}
+
+body > h1 {
+    margin-bottom: 10px;
+}
+
+body > h3 {
+    margin-top: 0;
+}
+
+a {
+    outline: none;
+    color: white;
+}
+
+ul a {
+    text-decoration: none;
+}
+
+ul {
+    list-style-type: none;
+    padding-left: 0;
+}
+
+div.content a:hover {
+    color: #f00;
+}
+
+li {
+    font-size: 16px;
+    padding-left: 32px;
+    line-height: 1.8em;
+}
+
+li:hover {
+    background-image: url('arrow.gif');
+    background-size: 16px;
+    background-repeat: no-repeat;
+    background-position: 8px 5px;
+}
+
+h1 {
+    line-height: 1.3em;
+}
+
+div.menu > div {
+    border: 4px solid white;
+    border-radius: 10px;
+    background-color: black;
+}
+
+div.content > div, div.menu > div {
+    background: linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.6));
+}
+
+div.content {
+    grid-column: 2 / 2;
+    font-size: 12px;
+}
+
+div.content > div {
+    margin-bottom: 10px;
+    padding: 10px;
+    border: 4px solid white;
+    border-radius: 10px;
+}
+
+div.content h4 {
+    font-size: 1.3em;
+    font-weight: bold;
+}
+
+@media (min-width: 1000px) {
+    div.main {
+        display: grid;
+        grid-template-columns: 220px auto;
+        grid-column-gap: 10px;
+        max-width: 1000px;
+    }
+    div.menu {
+        grid-column: 1 /  2;
+    }
+    div.menu > div {
+        margin: 0px 10px;
+    }
+}
+

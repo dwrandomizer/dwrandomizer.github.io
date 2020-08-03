@@ -1,0 +1,12 @@
+
+@media (max-width: 600px) {
+    li {
+        display: inline-block;
+        width: 30%;
+        font-size: 12px;
+
+    }
+    div.menu > div {
+        margin: 0 0 10px 0;
+    }
+}
