@@ -85,12 +85,13 @@ div.content h4 {
     font-weight: bold;
 }
 
-@media (min-width: 1000px) {
+@media (min-width: 600px) {
     div.main {
         display: grid;
         grid-template-columns: 220px auto;
         grid-column-gap: 10px;
         max-width: 1000px;
+        margin: auto;
     }
     div.menu {
         grid-column: 1 /  2;

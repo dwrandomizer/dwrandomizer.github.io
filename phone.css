@@ -1,5 +1,8 @@
 
 @media (max-width: 600px) {
+    h1 {
+        font-size: 1.5em;
+    }
     li {
         display: inline-block;
         width: 30%;
@@ -10,3 +13,4 @@
         margin: 0 0 10px 0;
     }
 }
+
