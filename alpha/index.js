@@ -54,10 +54,13 @@ class Rom extends Uint8Array {
 
         this.seed = seed;
         this.flags = flags;
-        Module.ccall('dwr_randomize', 'BigInt',
+        let checksum = Module.ccall('dwr_randomize', 'BigInt',
             ['string', 'BigInt', 'string', 'string', 'string'],
-            ['/'+this.name, seed, flags, sprite, '/']);
+            ['/'+this.name, seed, flags, sprite, '/'])
         this.outname = 'DWRando.' + seed + '.' + flags + '.nes';
+        // return value is signed, so fix it if it's negative
+        if (checksum < 0) checksum += 18446744073709551616n;
+        return checksum;
     }
 
     save() {
@@ -100,6 +103,7 @@ function setup_ui() {
     ui.addTriOption('Features',  3,  4, 6, 'Repel in Dungeons');
     ui.addTriOption('Features',  5,  4, 4, 'Permanent Repel');
     ui.addTriOption('Features',  7,  4, 2, 'Permanent Torch');
+    ui.addTriOption('Features',  6,  4, 0, 'Alternate Running Algorithm');
 
     ui.addTriOption('Monsters',  0,  5, 6, 'Random Monster Abilities');
     ui.addTriOption('Monsters',  2,  5, 4, 'Random Monster Zones');
