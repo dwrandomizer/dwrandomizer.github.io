@@ -2,9 +2,10 @@
 body {
     font-family: Helvetica, Arial, sans-serif;
     background-color: #888;
+    margin: 0;
 }
 
-body > div {
+#application {
     background-color: #fff;
     max-width: 800px;
     padding: 1em;
@@ -13,7 +14,7 @@ body > div {
 }
 
 h1, h3 {
-    text-align: center
+    text-align: center;
 }
 
 tabbar {
