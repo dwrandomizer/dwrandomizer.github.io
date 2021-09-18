@@ -41,16 +41,13 @@ var quit_ = function(status, toThrow) {
 // Determine the runtime environment we are in. You can customize this by
 // setting the ENVIRONMENT setting at compile time (see settings.js).
 
-var ENVIRONMENT_IS_WEB = false;
-var ENVIRONMENT_IS_WORKER = false;
-var ENVIRONMENT_IS_NODE = false;
-var ENVIRONMENT_IS_SHELL = false;
-ENVIRONMENT_IS_WEB = typeof window === 'object';
-ENVIRONMENT_IS_WORKER = typeof importScripts === 'function';
+// Attempt to auto-detect the environment
+var ENVIRONMENT_IS_WEB = typeof window === 'object';
+var ENVIRONMENT_IS_WORKER = typeof importScripts === 'function';
 // N.b. Electron.js environment is simultaneously a NODE-environment, but
 // also a web environment.
-ENVIRONMENT_IS_NODE = typeof process === 'object' && typeof process.versions === 'object' && typeof process.versions.node === 'string';
-ENVIRONMENT_IS_SHELL = !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_NODE && !ENVIRONMENT_IS_WORKER;
+var ENVIRONMENT_IS_NODE = typeof process === 'object' && typeof process.versions === 'object' && typeof process.versions.node === 'string';
+var ENVIRONMENT_IS_SHELL = !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_NODE && !ENVIRONMENT_IS_WORKER;
 
 if (Module['ENVIRONMENT']) {
   throw new Error('Module.ENVIRONMENT has been deprecated. To force the environment, use the ENVIRONMENT compile-time option (for example, -s ENVIRONMENT=web or -s ENVIRONMENT=node)');
@@ -75,6 +72,7 @@ var nodeFS;
 var nodePath;
 
 if (ENVIRONMENT_IS_NODE) {
+  if (!(typeof process === 'object' && typeof require === 'function')) throw new Error('not compiled for this environment (did you build to HTML and try to run it not on the web, or set ENVIRONMENT to something - like node - and run it someplace else - like on the web?)');
   if (ENVIRONMENT_IS_WORKER) {
     scriptDirectory = require('path').dirname(scriptDirectory) + '/';
   } else {
@@ -100,6 +98,16 @@ readBinary = function readBinary(filename) {
   return ret;
 };
 
+readAsync = function readAsync(filename, onload, onerror) {
+  if (!nodeFS) nodeFS = require('fs');
+  if (!nodePath) nodePath = require('path');
+  filename = nodePath['normalize'](filename);
+  nodeFS['readFile'](filename, function(err, data) {
+    if (err) onerror(err);
+    else onload(data.buffer);
+  });
+};
+
 // end include: node_shell_read.js
   if (process['argv'].length > 1) {
     thisProgram = process['argv'][1].replace(/\\/g, '/');
@@ -120,7 +128,11 @@ readBinary = function readBinary(filename) {
 
   process['on']('unhandledRejection', abort);
 
-  quit_ = function(status) {
+  quit_ = function(status, toThrow) {
+    if (keepRuntimeAlive()) {
+      process['exitCode'] = status;
+      throw toThrow;
+    }
     process['exit'](status);
   };
 
@@ -128,6 +140,8 @@ readBinary = function readBinary(filename) {
 
 } else
 if (ENVIRONMENT_IS_SHELL) {
+
+  if ((typeof process === 'object' && typeof require === 'function') || typeof window === 'object' || typeof importScripts === 'function') throw new Error('not compiled for this environment (did you build to HTML and try to run it not on the web, or set ENVIRONMENT to something - like node - and run it someplace else - like on the web?)');
 
   if (typeof read != 'undefined') {
     read_ = function shell_read(f) {
@@ -143,6 +157,10 @@ if (ENVIRONMENT_IS_SHELL) {
     data = read(f, 'binary');
     assert(typeof data === 'object');
     return data;
+  };
+
+  readAsync = function readAsync(f, onload, onerror) {
+    setTimeout(function() { onload(readBinary(f)); }, 0);
   };
 
   if (typeof scriptArgs != 'undefined') {
@@ -184,6 +202,8 @@ if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
   } else {
     scriptDirectory = '';
   }
+
+  if (!(typeof window === 'object' || typeof importScripts === 'function')) throw new Error('not compiled for this environment (did you build to HTML and try to run it not on the web, or set ENVIRONMENT to something - like node - and run it someplace else - like on the web?)');
 
   // Differentiate the Web Worker from the Node Worker case, as reading must
   // be done differently.
@@ -336,14 +356,12 @@ var WORKERFS = 'WORKERFS is no longer included by default; build with -lworkerfs
 var NODEFS = 'NODEFS is no longer included by default; build with -lnodefs.js';
 
 
+assert(!ENVIRONMENT_IS_SHELL, "shell environment detected but not enabled at build time.  Add 'shell' to `-s ENVIRONMENT` to enable.");
+
+
 
 
 var STACK_ALIGN = 16;
-
-function alignMemory(size, factor) {
-  if (!factor) factor = STACK_ALIGN; // stack alignment (16-byte) by default
-  return Math.ceil(size / factor) * factor;
-}
 
 function getNativeTypeSize(type) {
   switch (type) {
@@ -711,9 +729,12 @@ function ccall(ident, returnType, argTypes, args, opts) {
     }
   }
   var ret = func.apply(null, cArgs);
+  function onDone(ret) {
+    if (stack !== 0) stackRestore(stack);
+    return convertReturnValue(ret);
+  }
 
-  ret = convertReturnValue(ret);
-  if (stack !== 0) stackRestore(stack);
+  ret = onDone(ret);
   return ret;
 }
 
@@ -1267,12 +1288,16 @@ function checkStackCookie() {
 // end include: runtime_assertions.js
 var __ATPRERUN__  = []; // functions called before the runtime is initialized
 var __ATINIT__    = []; // functions called during startup
-var __ATMAIN__    = []; // functions called when main() is to be run
 var __ATEXIT__    = []; // functions called during shutdown
 var __ATPOSTRUN__ = []; // functions called after the main() is called
 
 var runtimeInitialized = false;
 var runtimeExited = false;
+var runtimeKeepaliveCounter = 0;
+
+function keepRuntimeAlive() {
+  return noExitRuntime || runtimeKeepaliveCounter > 0;
+}
 
 function preRun() {
 
@@ -1324,10 +1349,6 @@ function addOnPreRun(cb) {
 
 function addOnInit(cb) {
   __ATINIT__.unshift(cb);
-}
-
-function addOnPreMain(cb) {
-  __ATMAIN__.unshift(cb);
 }
 
 function addOnExit(cb) {
@@ -1612,8 +1633,9 @@ function createWasm() {
 
   function instantiateArrayBuffer(receiver) {
     return getBinaryPromise().then(function(binary) {
-      var result = WebAssembly.instantiate(binary, info);
-      return result;
+      return WebAssembly.instantiate(binary, info);
+    }).then(function (instance) {
+      return instance;
     }).then(receiver, function(reason) {
       err('failed to asynchronously prepare wasm: ' + reason);
 
@@ -1634,7 +1656,10 @@ function createWasm() {
         typeof fetch === 'function') {
       return fetch(wasmBinaryFile, { credentials: 'same-origin' }).then(function (response) {
         var result = WebAssembly.instantiateStreaming(response, info);
-        return result.then(receiveInstantiationResult, function(reason) {
+
+        return result.then(
+          receiveInstantiationResult,
+          function(reason) {
             // We expect the most common failure cause to be a bad MIME type for the binary,
             // in which case falling back to ArrayBuffer instantiation should work.
             err('wasm streaming compile failed: ' + reason);
@@ -1731,11 +1756,6 @@ var ASM_CONSTS = {
       return error.stack.toString();
     }
 
-  var runtimeKeepaliveCounter=0;
-  function keepRuntimeAlive() {
-      return noExitRuntime || runtimeKeepaliveCounter > 0;
-    }
-
   function stackTrace() {
       var js = jsStackTrace();
       if (Module['extraStackTrace']) js += '\n' + Module['extraStackTrace']();
@@ -1751,7 +1771,7 @@ var ASM_CONSTS = {
       return value;
     }
   
-  var PATH={splitPath:function(filename) {
+  var PATH = {splitPath:function(filename) {
         var splitPathRe = /^(\/?|)([\s\S]*?)((?:\.{1,2}|[^\/]+?|)(\.[^.\/]*|))(?:[\/]*)$/;
         return splitPathRe.exec(filename).slice(1);
       },normalizeArray:function(parts, allowAboveRoot) {
@@ -1840,7 +1860,7 @@ var ASM_CONSTS = {
       return function() { abort("no cryptographic support found for randomDevice. consider polyfilling it if you want to use something insecure like Math.random(), e.g. put this in a --pre-js: var crypto = { getRandomValues: function(array) { for (var i = 0; i < array.length; i++) array[i] = (Math.random()*256)|0 } };"); };
     }
   
-  var PATH_FS={resolve:function() {
+  var PATH_FS = {resolve:function() {
         var resolvedPath = '',
           resolvedAbsolute = false;
         for (var i = arguments.length - 1; i >= -1 && !resolvedAbsolute; i--) {
@@ -1893,7 +1913,7 @@ var ASM_CONSTS = {
         return outputParts.join('/');
       }};
   
-  var TTY={ttys:[],init:function () {
+  var TTY = {ttys:[],init:function () {
         // https://github.com/emscripten-core/emscripten/pull/1555
         // if (ENVIRONMENT_IS_NODE) {
         //   // currently, FS.init does not distinguish if process.stdin is a file or TTY
@@ -1971,7 +1991,7 @@ var ASM_CONSTS = {
             if (ENVIRONMENT_IS_NODE) {
               // we will read data by chunks of BUFSIZE
               var BUFSIZE = 256;
-              var buf = Buffer.alloc ? Buffer.alloc(BUFSIZE) : new Buffer(BUFSIZE);
+              var buf = Buffer.alloc(BUFSIZE);
               var bytesRead = 0;
   
               try {
@@ -2035,13 +2055,18 @@ var ASM_CONSTS = {
           }
         }}};
   
-  function mmapAlloc(size) {
-      var alignedSize = alignMemory(size, 65536);
-      var ptr = abort('malloc was not included, but is needed in mmapAlloc. Adding "_malloc" to EXPORTED_FUNCTIONS should fix that. This may be a bug in the compiler, please file an issue.');;
-      while (size < alignedSize) HEAP8[ptr + size++] = 0;
-      return ptr;
+  function zeroMemory(address, size) {
+      HEAPU8.fill(0, address, address + size);
     }
-  var MEMFS={ops_table:null,mount:function(mount) {
+  
+  function alignMemory(size, alignment) {
+      assert(alignment, "alignment argument is required");
+      return Math.ceil(size / alignment) * alignment;
+    }
+  function mmapAlloc(size) {
+      abort('internal error: mmapAlloc called but `memalign` native symbol not exported');
+    }
+  var MEMFS = {ops_table:null,mount:function(mount) {
         return MEMFS.createNode(null, '/', 16384 | 511 /* 0777 */, 0);
       },createNode:function(parent, name, mode, dev) {
         if (FS.isBlkdev(mode) || FS.isFIFO(mode)) {
@@ -2354,10 +2379,26 @@ var ASM_CONSTS = {
           return 0;
         }}};
   
-  var ERRNO_MESSAGES={0:"Success",1:"Arg list too long",2:"Permission denied",3:"Address already in use",4:"Address not available",5:"Address family not supported by protocol family",6:"No more processes",7:"Socket already connected",8:"Bad file number",9:"Trying to read unreadable message",10:"Mount device busy",11:"Operation canceled",12:"No children",13:"Connection aborted",14:"Connection refused",15:"Connection reset by peer",16:"File locking deadlock error",17:"Destination address required",18:"Math arg out of domain of func",19:"Quota exceeded",20:"File exists",21:"Bad address",22:"File too large",23:"Host is unreachable",24:"Identifier removed",25:"Illegal byte sequence",26:"Connection already in progress",27:"Interrupted system call",28:"Invalid argument",29:"I/O error",30:"Socket is already connected",31:"Is a directory",32:"Too many symbolic links",33:"Too many open files",34:"Too many links",35:"Message too long",36:"Multihop attempted",37:"File or path name too long",38:"Network interface is not configured",39:"Connection reset by network",40:"Network is unreachable",41:"Too many open files in system",42:"No buffer space available",43:"No such device",44:"No such file or directory",45:"Exec format error",46:"No record locks available",47:"The link has been severed",48:"Not enough core",49:"No message of desired type",50:"Protocol not available",51:"No space left on device",52:"Function not implemented",53:"Socket is not connected",54:"Not a directory",55:"Directory not empty",56:"State not recoverable",57:"Socket operation on non-socket",59:"Not a typewriter",60:"No such device or address",61:"Value too large for defined data type",62:"Previous owner died",63:"Not super-user",64:"Broken pipe",65:"Protocol error",66:"Unknown protocol",67:"Protocol wrong type for socket",68:"Math result not representable",69:"Read only file system",70:"Illegal seek",71:"No such process",72:"Stale file handle",73:"Connection timed out",74:"Text file busy",75:"Cross-device link",100:"Device not a stream",101:"Bad font file fmt",102:"Invalid slot",103:"Invalid request code",104:"No anode",105:"Block device required",106:"Channel number out of range",107:"Level 3 halted",108:"Level 3 reset",109:"Link number out of range",110:"Protocol driver not attached",111:"No CSI structure available",112:"Level 2 halted",113:"Invalid exchange",114:"Invalid request descriptor",115:"Exchange full",116:"No data (for no delay io)",117:"Timer expired",118:"Out of streams resources",119:"Machine is not on the network",120:"Package not installed",121:"The object is remote",122:"Advertise error",123:"Srmount error",124:"Communication error on send",125:"Cross mount point (not really error)",126:"Given log. name not unique",127:"f.d. invalid for this operation",128:"Remote address changed",129:"Can   access a needed shared lib",130:"Accessing a corrupted shared lib",131:".lib section in a.out corrupted",132:"Attempting to link in too many libs",133:"Attempting to exec a shared library",135:"Streams pipe error",136:"Too many users",137:"Socket type not supported",138:"Not supported",139:"Protocol family not supported",140:"Can't send after socket shutdown",141:"Too many references",142:"Host is down",148:"No medium (in tape drive)",156:"Level 2 not synchronized"};
+  function asyncLoad(url, onload, onerror, noRunDep) {
+      var dep = !noRunDep ? getUniqueRunDependency('al ' + url) : '';
+      readAsync(url, function(arrayBuffer) {
+        assert(arrayBuffer, 'Loading data file "' + url + '" failed (no arrayBuffer).');
+        onload(new Uint8Array(arrayBuffer));
+        if (dep) removeRunDependency(dep);
+      }, function(event) {
+        if (onerror) {
+          onerror();
+        } else {
+          throw 'Loading data file "' + url + '" failed.';
+        }
+      });
+      if (dep) addRunDependency(dep);
+    }
   
-  var ERRNO_CODES={EPERM:63,ENOENT:44,ESRCH:71,EINTR:27,EIO:29,ENXIO:60,E2BIG:1,ENOEXEC:45,EBADF:8,ECHILD:12,EAGAIN:6,EWOULDBLOCK:6,ENOMEM:48,EACCES:2,EFAULT:21,ENOTBLK:105,EBUSY:10,EEXIST:20,EXDEV:75,ENODEV:43,ENOTDIR:54,EISDIR:31,EINVAL:28,ENFILE:41,EMFILE:33,ENOTTY:59,ETXTBSY:74,EFBIG:22,ENOSPC:51,ESPIPE:70,EROFS:69,EMLINK:34,EPIPE:64,EDOM:18,ERANGE:68,ENOMSG:49,EIDRM:24,ECHRNG:106,EL2NSYNC:156,EL3HLT:107,EL3RST:108,ELNRNG:109,EUNATCH:110,ENOCSI:111,EL2HLT:112,EDEADLK:16,ENOLCK:46,EBADE:113,EBADR:114,EXFULL:115,ENOANO:104,EBADRQC:103,EBADSLT:102,EDEADLOCK:16,EBFONT:101,ENOSTR:100,ENODATA:116,ETIME:117,ENOSR:118,ENONET:119,ENOPKG:120,EREMOTE:121,ENOLINK:47,EADV:122,ESRMNT:123,ECOMM:124,EPROTO:65,EMULTIHOP:36,EDOTDOT:125,EBADMSG:9,ENOTUNIQ:126,EBADFD:127,EREMCHG:128,ELIBACC:129,ELIBBAD:130,ELIBSCN:131,ELIBMAX:132,ELIBEXEC:133,ENOSYS:52,ENOTEMPTY:55,ENAMETOOLONG:37,ELOOP:32,EOPNOTSUPP:138,EPFNOSUPPORT:139,ECONNRESET:15,ENOBUFS:42,EAFNOSUPPORT:5,EPROTOTYPE:67,ENOTSOCK:57,ENOPROTOOPT:50,ESHUTDOWN:140,ECONNREFUSED:14,EADDRINUSE:3,ECONNABORTED:13,ENETUNREACH:40,ENETDOWN:38,ETIMEDOUT:73,EHOSTDOWN:142,EHOSTUNREACH:23,EINPROGRESS:26,EALREADY:7,EDESTADDRREQ:17,EMSGSIZE:35,EPROTONOSUPPORT:66,ESOCKTNOSUPPORT:137,EADDRNOTAVAIL:4,ENETRESET:39,EISCONN:30,ENOTCONN:53,ETOOMANYREFS:141,EUSERS:136,EDQUOT:19,ESTALE:72,ENOTSUP:138,ENOMEDIUM:148,EILSEQ:25,EOVERFLOW:61,ECANCELED:11,ENOTRECOVERABLE:56,EOWNERDEAD:62,ESTRPIPE:135};
-  var FS={root:null,mounts:[],devices:{},streams:[],nextInode:1,nameTable:null,currentPath:"/",initialized:false,ignorePermissions:true,trackingDelegate:{},tracking:{openFlags:{READ:1,WRITE:2}},ErrnoError:null,genericErrors:{},filesystems:null,syncFSRequests:0,lookupPath:function(path, opts) {
+  var ERRNO_MESSAGES = {0:"Success",1:"Arg list too long",2:"Permission denied",3:"Address already in use",4:"Address not available",5:"Address family not supported by protocol family",6:"No more processes",7:"Socket already connected",8:"Bad file number",9:"Trying to read unreadable message",10:"Mount device busy",11:"Operation canceled",12:"No children",13:"Connection aborted",14:"Connection refused",15:"Connection reset by peer",16:"File locking deadlock error",17:"Destination address required",18:"Math arg out of domain of func",19:"Quota exceeded",20:"File exists",21:"Bad address",22:"File too large",23:"Host is unreachable",24:"Identifier removed",25:"Illegal byte sequence",26:"Connection already in progress",27:"Interrupted system call",28:"Invalid argument",29:"I/O error",30:"Socket is already connected",31:"Is a directory",32:"Too many symbolic links",33:"Too many open files",34:"Too many links",35:"Message too long",36:"Multihop attempted",37:"File or path name too long",38:"Network interface is not configured",39:"Connection reset by network",40:"Network is unreachable",41:"Too many open files in system",42:"No buffer space available",43:"No such device",44:"No such file or directory",45:"Exec format error",46:"No record locks available",47:"The link has been severed",48:"Not enough core",49:"No message of desired type",50:"Protocol not available",51:"No space left on device",52:"Function not implemented",53:"Socket is not connected",54:"Not a directory",55:"Directory not empty",56:"State not recoverable",57:"Socket operation on non-socket",59:"Not a typewriter",60:"No such device or address",61:"Value too large for defined data type",62:"Previous owner died",63:"Not super-user",64:"Broken pipe",65:"Protocol error",66:"Unknown protocol",67:"Protocol wrong type for socket",68:"Math result not representable",69:"Read only file system",70:"Illegal seek",71:"No such process",72:"Stale file handle",73:"Connection timed out",74:"Text file busy",75:"Cross-device link",100:"Device not a stream",101:"Bad font file fmt",102:"Invalid slot",103:"Invalid request code",104:"No anode",105:"Block device required",106:"Channel number out of range",107:"Level 3 halted",108:"Level 3 reset",109:"Link number out of range",110:"Protocol driver not attached",111:"No CSI structure available",112:"Level 2 halted",113:"Invalid exchange",114:"Invalid request descriptor",115:"Exchange full",116:"No data (for no delay io)",117:"Timer expired",118:"Out of streams resources",119:"Machine is not on the network",120:"Package not installed",121:"The object is remote",122:"Advertise error",123:"Srmount error",124:"Communication error on send",125:"Cross mount point (not really error)",126:"Given log. name not unique",127:"f.d. invalid for this operation",128:"Remote address changed",129:"Can   access a needed shared lib",130:"Accessing a corrupted shared lib",131:".lib section in a.out corrupted",132:"Attempting to link in too many libs",133:"Attempting to exec a shared library",135:"Streams pipe error",136:"Too many users",137:"Socket type not supported",138:"Not supported",139:"Protocol family not supported",140:"Can't send after socket shutdown",141:"Too many references",142:"Host is down",148:"No medium (in tape drive)",156:"Level 2 not synchronized"};
+  
+  var ERRNO_CODES = {};
+  var FS = {root:null,mounts:[],devices:{},streams:[],nextInode:1,nameTable:null,currentPath:"/",initialized:false,ignorePermissions:true,trackingDelegate:{},tracking:{openFlags:{READ:1,WRITE:2}},ErrnoError:null,genericErrors:{},filesystems:null,syncFSRequests:0,lookupPath:function(path, opts) {
         path = PATH_FS.resolve(FS.cwd(), path);
         opts = opts || {};
   
@@ -3887,7 +3928,7 @@ var ASM_CONSTS = {
         }
         addRunDependency(dep);
         if (typeof url == 'string') {
-          Browser.asyncLoad(url, function(byteArray) {
+          asyncLoad(url, function(byteArray) {
             processData(byteArray);
           }, onerror);
         } else {
@@ -3978,7 +4019,7 @@ var ASM_CONSTS = {
       },standardizePath:function() {
         abort('FS.standardizePath has been removed; use PATH.normalize instead');
       }};
-  var SYSCALLS={mappings:{},DEFAULT_POLLMASK:5,umask:511,calculateAt:function(dirfd, path, allowEmpty) {
+  var SYSCALLS = {mappings:{},DEFAULT_POLLMASK:5,umask:511,calculateAt:function(dirfd, path, allowEmpty) {
         if (path[0] === '/') {
           return path;
         }
@@ -4374,6 +4415,129 @@ var ASM_CONSTS = {
   });
   FS.FSNode = FSNode;
   FS.staticInit();;
+ERRNO_CODES = {
+      'EPERM': 63,
+      'ENOENT': 44,
+      'ESRCH': 71,
+      'EINTR': 27,
+      'EIO': 29,
+      'ENXIO': 60,
+      'E2BIG': 1,
+      'ENOEXEC': 45,
+      'EBADF': 8,
+      'ECHILD': 12,
+      'EAGAIN': 6,
+      'EWOULDBLOCK': 6,
+      'ENOMEM': 48,
+      'EACCES': 2,
+      'EFAULT': 21,
+      'ENOTBLK': 105,
+      'EBUSY': 10,
+      'EEXIST': 20,
+      'EXDEV': 75,
+      'ENODEV': 43,
+      'ENOTDIR': 54,
+      'EISDIR': 31,
+      'EINVAL': 28,
+      'ENFILE': 41,
+      'EMFILE': 33,
+      'ENOTTY': 59,
+      'ETXTBSY': 74,
+      'EFBIG': 22,
+      'ENOSPC': 51,
+      'ESPIPE': 70,
+      'EROFS': 69,
+      'EMLINK': 34,
+      'EPIPE': 64,
+      'EDOM': 18,
+      'ERANGE': 68,
+      'ENOMSG': 49,
+      'EIDRM': 24,
+      'ECHRNG': 106,
+      'EL2NSYNC': 156,
+      'EL3HLT': 107,
+      'EL3RST': 108,
+      'ELNRNG': 109,
+      'EUNATCH': 110,
+      'ENOCSI': 111,
+      'EL2HLT': 112,
+      'EDEADLK': 16,
+      'ENOLCK': 46,
+      'EBADE': 113,
+      'EBADR': 114,
+      'EXFULL': 115,
+      'ENOANO': 104,
+      'EBADRQC': 103,
+      'EBADSLT': 102,
+      'EDEADLOCK': 16,
+      'EBFONT': 101,
+      'ENOSTR': 100,
+      'ENODATA': 116,
+      'ETIME': 117,
+      'ENOSR': 118,
+      'ENONET': 119,
+      'ENOPKG': 120,
+      'EREMOTE': 121,
+      'ENOLINK': 47,
+      'EADV': 122,
+      'ESRMNT': 123,
+      'ECOMM': 124,
+      'EPROTO': 65,
+      'EMULTIHOP': 36,
+      'EDOTDOT': 125,
+      'EBADMSG': 9,
+      'ENOTUNIQ': 126,
+      'EBADFD': 127,
+      'EREMCHG': 128,
+      'ELIBACC': 129,
+      'ELIBBAD': 130,
+      'ELIBSCN': 131,
+      'ELIBMAX': 132,
+      'ELIBEXEC': 133,
+      'ENOSYS': 52,
+      'ENOTEMPTY': 55,
+      'ENAMETOOLONG': 37,
+      'ELOOP': 32,
+      'EOPNOTSUPP': 138,
+      'EPFNOSUPPORT': 139,
+      'ECONNRESET': 15,
+      'ENOBUFS': 42,
+      'EAFNOSUPPORT': 5,
+      'EPROTOTYPE': 67,
+      'ENOTSOCK': 57,
+      'ENOPROTOOPT': 50,
+      'ESHUTDOWN': 140,
+      'ECONNREFUSED': 14,
+      'EADDRINUSE': 3,
+      'ECONNABORTED': 13,
+      'ENETUNREACH': 40,
+      'ENETDOWN': 38,
+      'ETIMEDOUT': 73,
+      'EHOSTDOWN': 142,
+      'EHOSTUNREACH': 23,
+      'EINPROGRESS': 26,
+      'EALREADY': 7,
+      'EDESTADDRREQ': 17,
+      'EMSGSIZE': 35,
+      'EPROTONOSUPPORT': 66,
+      'ESOCKTNOSUPPORT': 137,
+      'EADDRNOTAVAIL': 4,
+      'ENETRESET': 39,
+      'EISCONN': 30,
+      'ENOTCONN': 53,
+      'ETOOMANYREFS': 141,
+      'EUSERS': 136,
+      'EDQUOT': 19,
+      'ESTALE': 72,
+      'ENOTSUP': 138,
+      'ENOMEDIUM': 148,
+      'EILSEQ': 25,
+      'EOVERFLOW': 61,
+      'ECANCELED': 11,
+      'ENOTRECOVERABLE': 56,
+      'EOWNERDEAD': 62,
+      'ESTRPIPE': 135,
+    };;
 var ASSERTIONS = true;
 
 
@@ -4436,6 +4600,11 @@ var ___errno_location = Module["___errno_location"] = createExportWrapper("__err
 var _fflush = Module["_fflush"] = createExportWrapper("fflush");
 
 /** @type {function(...*):?} */
+var _emscripten_stack_get_end = Module["_emscripten_stack_get_end"] = function() {
+  return (_emscripten_stack_get_end = Module["_emscripten_stack_get_end"] = Module["asm"]["emscripten_stack_get_end"]).apply(null, arguments);
+};
+
+/** @type {function(...*):?} */
 var stackSave = Module["stackSave"] = createExportWrapper("stackSave");
 
 /** @type {function(...*):?} */
@@ -4452,11 +4621,6 @@ var _emscripten_stack_init = Module["_emscripten_stack_init"] = function() {
 /** @type {function(...*):?} */
 var _emscripten_stack_get_free = Module["_emscripten_stack_get_free"] = function() {
   return (_emscripten_stack_get_free = Module["_emscripten_stack_get_free"] = Module["asm"]["emscripten_stack_get_free"]).apply(null, arguments);
-};
-
-/** @type {function(...*):?} */
-var _emscripten_stack_get_end = Module["_emscripten_stack_get_end"] = function() {
-  return (_emscripten_stack_get_end = Module["_emscripten_stack_get_end"] = Module["asm"]["emscripten_stack_get_end"]).apply(null, arguments);
 };
 
 
@@ -4512,6 +4676,8 @@ if (!Object.getOwnPropertyDescriptor(Module, "getTempRet0")) Module["getTempRet0
 if (!Object.getOwnPropertyDescriptor(Module, "setTempRet0")) Module["setTempRet0"] = function() { abort("'setTempRet0' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "callMain")) Module["callMain"] = function() { abort("'callMain' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "abort")) Module["abort"] = function() { abort("'abort' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "keepRuntimeAlive")) Module["keepRuntimeAlive"] = function() { abort("'keepRuntimeAlive' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "zeroMemory")) Module["zeroMemory"] = function() { abort("'zeroMemory' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "stringToNewUTF8")) Module["stringToNewUTF8"] = function() { abort("'stringToNewUTF8' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "setFileTime")) Module["setFileTime"] = function() { abort("'setFileTime' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "abortOnCannotGrowMemory")) Module["abortOnCannotGrowMemory"] = function() { abort("'abortOnCannotGrowMemory' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
@@ -4545,13 +4711,16 @@ if (!Object.getOwnPropertyDescriptor(Module, "listenOnce")) Module["listenOnce"]
 if (!Object.getOwnPropertyDescriptor(Module, "autoResumeAudioContext")) Module["autoResumeAudioContext"] = function() { abort("'autoResumeAudioContext' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "dynCall")) Module["dynCall"] = function() { abort("'dynCall' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "callRuntimeCallbacks")) Module["callRuntimeCallbacks"] = function() { abort("'callRuntimeCallbacks' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Object.getOwnPropertyDescriptor(Module, "runtimeKeepaliveCounter")) Module["runtimeKeepaliveCounter"] = function() { abort("'runtimeKeepaliveCounter' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Object.getOwnPropertyDescriptor(Module, "keepRuntimeAlive")) Module["keepRuntimeAlive"] = function() { abort("'keepRuntimeAlive' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "handleException")) Module["handleException"] = function() { abort("'handleException' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "runtimeKeepalivePush")) Module["runtimeKeepalivePush"] = function() { abort("'runtimeKeepalivePush' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "runtimeKeepalivePop")) Module["runtimeKeepalivePop"] = function() { abort("'runtimeKeepalivePop' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "callUserCallback")) Module["callUserCallback"] = function() { abort("'callUserCallback' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "maybeExit")) Module["maybeExit"] = function() { abort("'maybeExit' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "safeSetTimeout")) Module["safeSetTimeout"] = function() { abort("'safeSetTimeout' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "asmjsMangle")) Module["asmjsMangle"] = function() { abort("'asmjsMangle' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "asyncLoad")) Module["asyncLoad"] = function() { abort("'asyncLoad' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "alignMemory")) Module["alignMemory"] = function() { abort("'alignMemory' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "mmapAlloc")) Module["mmapAlloc"] = function() { abort("'mmapAlloc' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "reallyNegative")) Module["reallyNegative"] = function() { abort("'reallyNegative' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "unSign")) Module["unSign"] = function() { abort("'unSign' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "reSign")) Module["reSign"] = function() { abort("'reSign' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
@@ -4626,7 +4795,6 @@ if (!Object.getOwnPropertyDescriptor(Module, "convertU32PairToI53")) Module["con
 if (!Object.getOwnPropertyDescriptor(Module, "uncaughtExceptionCount")) Module["uncaughtExceptionCount"] = function() { abort("'uncaughtExceptionCount' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "exceptionLast")) Module["exceptionLast"] = function() { abort("'exceptionLast' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "exceptionCaught")) Module["exceptionCaught"] = function() { abort("'exceptionCaught' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Object.getOwnPropertyDescriptor(Module, "ExceptionInfoAttrs")) Module["ExceptionInfoAttrs"] = function() { abort("'ExceptionInfoAttrs' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "ExceptionInfo")) Module["ExceptionInfo"] = function() { abort("'ExceptionInfo' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "CatchInfo")) Module["CatchInfo"] = function() { abort("'CatchInfo' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "exception_addRef")) Module["exception_addRef"] = function() { abort("'exception_addRef' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
@@ -4635,8 +4803,8 @@ if (!Object.getOwnPropertyDescriptor(Module, "Browser")) Module["Browser"] = fun
 if (!Object.getOwnPropertyDescriptor(Module, "funcWrappers")) Module["funcWrappers"] = function() { abort("'funcWrappers' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "getFuncWrapper")) Module["getFuncWrapper"] = function() { abort("'getFuncWrapper' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "setMainLoop")) Module["setMainLoop"] = function() { abort("'setMainLoop' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "wget")) Module["wget"] = function() { abort("'wget' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "FS")) Module["FS"] = function() { abort("'FS' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Object.getOwnPropertyDescriptor(Module, "mmapAlloc")) Module["mmapAlloc"] = function() { abort("'mmapAlloc' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "MEMFS")) Module["MEMFS"] = function() { abort("'MEMFS' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "TTY")) Module["TTY"] = function() { abort("'TTY' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
 if (!Object.getOwnPropertyDescriptor(Module, "PIPEFS")) Module["PIPEFS"] = function() { abort("'PIPEFS' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)") };
@@ -4814,14 +4982,6 @@ function exit(status, implicit) {
 
   checkUnflushedContent();
 
-  // if this is just main exit-ing implicitly, and the status is 0, then we
-  // don't need to do anything here and can just leave. if the status is
-  // non-zero, though, then we need to report it.
-  // (we may have warned about this earlier, if a situation justifies doing so)
-  if (implicit && keepRuntimeAlive() && status === 0) {
-    return;
-  }
-
   if (keepRuntimeAlive()) {
     // if exit() was called, we may warn the user if the runtime isn't actually being shut down
     if (!implicit) {
@@ -4829,15 +4989,19 @@ function exit(status, implicit) {
       err(msg);
     }
   } else {
-
     exitRuntime();
-
-    if (Module['onExit']) Module['onExit'](status);
-
-    ABORT = true;
   }
 
-  quit_(status, new ExitStatus(status));
+  procExit(status);
+}
+
+function procExit(code) {
+  EXITSTATUS = code;
+  if (!keepRuntimeAlive()) {
+    if (Module['onExit']) Module['onExit'](code);
+    ABORT = true;
+  }
+  quit_(code, new ExitStatus(code));
 }
 
 if (Module['preInit']) {
