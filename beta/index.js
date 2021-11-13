@@ -9,7 +9,6 @@ function require(jsFile) {
     return el;
 }
 
-
 require('interface.js');
 require('dwrandomizer.js');
 require('base32.js');
@@ -207,15 +206,23 @@ function setup_ui() {
     spriteBox.value = localStorage.getItem('sprite') || 'Random';
     spriteBox.id = "sprite-box";
     spriteBox.getValue = function() {
-        if (this.classList.contains('invalid'))
+        if (!sprite_choices.includes(this.value))
             return 'Random';
         return this.value;
     }
-    spriteBox.addEventListener('change', function(event) {
+    spriteBox.addEventListener('focus', function(event) {
+        if (this.value) {
+            this.value = '';
+        }
+    });
+    spriteBox.addEventListener('focusout', function(event) {
+        if (this.value == '') {
+            this.value = localStorage.getItem('sprite') || 'Random';
+        }
         if (sprite_choices.includes(this.value)) {
             this.classList.remove('invalid');
             localStorage.setItem('sprite', this.value);
-            spritePreview.setAttribute('src', 'sprites/' + spriteBox.getValue() 
+            spritePreview.setAttribute('src', 'sprites/' + this.getValue() 
                 + '.png');
         } else {
             this.classList.add('invalid');
@@ -230,7 +237,7 @@ function setup_ui() {
         'width': '32px'
     })
     spritePreview.id = 'sprite-preview';
-    spritePreview.setAttribute('src', 'sprites/' + spriteBox.getValue() 
+    spritePreview.setAttribute('src', 'sprites/' + spriteBox.value
         + '.png');
     spriteBox.parentElement.append(spritePreview);
     ui.updateSummary();
