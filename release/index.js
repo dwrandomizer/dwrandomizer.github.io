@@ -36,7 +36,7 @@ function stdout(asciiCode) {
     new_char = String.fromCharCode(asciiCode);
     log += new_char
     if (new_char.endsWith('\n')) {
-        console.log(log);
+//         console.log(log);
         log = '';
     }
 }
