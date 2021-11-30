@@ -86,13 +86,21 @@ div.content h4 {
     font-weight: bold;
 }
 
+div.logo img {
+    width: 100%;
+}
+
 @media (min-width: 600px) {
-    div.main {
+    div.main, div.logo {
         display: grid;
-        grid-template-columns: 220px auto;
-        grid-column-gap: 10px;
+        grid-template-columns: 230px auto;
         max-width: 1000px;
         margin: auto;
+    }
+    div.logo img {
+        width: 597px;
+        height: 72px;
+        margin: 1em 0.2em;
     }
     div.menu {
         grid-column: 1 /  2;
