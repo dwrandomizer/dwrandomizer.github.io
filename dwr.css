@@ -88,6 +88,7 @@ div.content h4 {
 
 div.logo img {
     width: 100%;
+    filter: filter: drop-shadow(3px 3px 1px #555);
 }
 
 @media (min-width: 600px) {

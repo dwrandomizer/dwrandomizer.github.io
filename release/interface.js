@@ -713,9 +713,9 @@ class Interface {
         if (description) {
             let descriptionEl = this.create('div', description, {
                 'font-size': '0.7em',
-                'color': '#666',
                 'margin-left': '2em',
             });
+            descriptionEl.classList.add('description');
             container.append(descriptionEl);
         }
         if (retain)

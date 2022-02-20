@@ -1,5 +1,8 @@
 
 
+/**
+ * A class for creating a modal window
+ */
 class Modal {
     constructor(width, height, title, okText, cancelText, okFunc) {
         if (Modal._instance)
@@ -62,6 +65,16 @@ class Modal {
             canceler.append(cancelButton);
         }
     }
+
+    /**
+     * Creates a new HTML element
+     *
+     * @param element The element type (e.g. div, span, etc)
+     * @param text Text to be inserted into the element. Pass null/undefined
+     *      to leave the element empty
+     * @param style An object containing any additional style attributes to be
+     *      added to the object
+     */
     create(element, text, style) {
         let el = document.createElement(element);
         if (text)
@@ -78,11 +91,17 @@ class Modal {
     }
 }
 
+/**
+ * Creates a modal for loading & storing flags
+ */
 class FlagsModal extends Modal {
     constructor() {
         super(400, 300, 'Presets', null, 'Cancel');
         let builtinPresets = {
-            'Standard': 'IVIAAVCAKACAAAAAAAAAAAAB'
+            'Standard': 'IVIAAVCAKACAAAAAAAAAAEAA',
+            'Fast Standard': 'IVIAAVCAKACFAAAAAAAAAIAA',
+            'Easy Standard': 'IVIAAVCFKACACQAAAAAAAZAA',
+            'Tiebreaker': 'IVKQAVCEKEAFKRIAAAAAAYAA',
         }
         this.dialog.append(this.create('div', 'Save', {
             'font-weight': 'normal',

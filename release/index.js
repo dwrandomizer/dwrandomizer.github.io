@@ -36,7 +36,7 @@ function stdout(asciiCode) {
     new_char = String.fromCharCode(asciiCode);
     log += new_char
     if (new_char.endsWith('\n')) {
-//         console.log(log);
+        console.log(log);
         log = '';
     }
 }
@@ -100,7 +100,7 @@ class Rom extends Uint8Array {
      * Prompts the user to save the generated ROM file
      */
     save() {
-        this.output = FS.readFile('/'+this.outname, null);
+        this.output = FS.readFile('/'+this.outname);
         FS.unlink('/'+this.outname);
         let url = URL.createObjectURL(new Blob([this.output]), {
             type: 'application/octet-stream'
@@ -108,7 +108,8 @@ class Rom extends Uint8Array {
         let downloader = document.createElement('a');
         downloader.href = url;
         downloader.download = this.outname;
-        downloader.click()
+        downloader.click();
+        URL.revokeObjectURL(url);
     }
 }
 
