@@ -33,12 +33,12 @@ let error = ''
  * Handler for wasm stdout
  */
 function stdout(asciiCode) {
-    new_char = String.fromCharCode(asciiCode);
-    log += new_char
-    if (new_char.endsWith('\n')) {
-        console.log(log);
-        log = '';
-    }
+//     new_char = String.fromCharCode(asciiCode);
+//     log += new_char
+//     if (new_char.endsWith('\n')) {
+//         console.log(log);
+//         log = '';
+//     }
 }
 
 /**
